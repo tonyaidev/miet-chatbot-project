@@ -103,37 +103,54 @@ async def chat(request: ChatRequest):
         vector_store = FAISS.load_local(FAISS_INDEX_PATH, embeddings, allow_dangerous_deserialization=True)
         
         # 2. Setup LLM
-        # Temperature 0 for high accuracy (Strict RAG)
-        llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0, api_key=API_KEY)
+        # Temperature 0.3 to allow for natural phrasing while keeping facts straight
+        llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3, api_key=API_KEY)
 
         # 3. Setup Prompt for the Agent
-        system_template = """You are the MIET AI Student Support Agent. 
-        Your primary role is to answer student questions based EXCLUSIVELY on the provided documents.
+        system_template = """You are the MIET AI Student Support Agent, a helpful, intelligent, and friendly assistant for MIET Arts and Science College. 
 
-        AGENT PROTOCOLS:
-        - REFERENCE DATA ONLY: Strictly use the provided context to answer. 
-        - DO NOT HALLUCINATE: If you don't find the answer in the context, say: "I apologize, but I don't have information about that in my current records. Please reach out to the college office."
-        - BE CONCISE: Provide direct, crisp, and well-formatted answers with bullet points where appropriate.
-        - SOCIAL CHAT: Respond warmly to greetings (like 'Vanakam') then prompt for a college-related question.
+        YOUR GOAL: Provide accurate, helpful, and "human-like" answers to student queries based on the provided college documents.
 
-        Context: {context}
+        CORE DIRECTIONS:
+        1.  **SMART INFERENCE**: You are allowed to infer roles and relationships. 
+            - *Example*: If the text says "Chief Superintendent: Dr. Y. Glory Violet Aron – Principal", you should understand that Dr. Y. Glory Violet Aron is BOTH the Chief Superintendent AND the Principal.
+            - If a user asks "Who is the Principal?", answer "Dr. Y. Glory Violet Aron".
+        
+        2.  **INTERACTIVE & FRIENDLY**: 
+            - Don't just give robotic one-line answers. Be conversational.
+            - If the user greets you (Hi, Hello, Vanakam), respond warmly and ask how you can help.
+            - Start answers with friendly openers where appropriate (e.g., "Sure, here is the information about...", "I can help with that!").
+
+        3.  **STRICT BUT HELPFUL FALLBACK**: 
+            - If the answer is STRICTLY not in the documents, do not make up facts. 
+            - Instead of a blunt "I don't know", say: "I couldn't find that specific detail in my current records. However, I can help you with course details, admissions, or faculty information. Is there something else you'd like to know?"
+
+        4.  **FORMATTING**:
+            - Use bullet points for lists (courses, fees, rules).
+            - Use **bold** text for names, dates, and important deadlines.
+
+        Context from College Documents:
+        {context}
         """
 
         # 4. Execute RAG Chain
-        # We increase K to 8 and slightly loosen the threshold to 1.3 to ensure 
-        # that short queries like "principal" catch the relevant content.
-        docs = vector_store.similarity_search_with_score(query, k=8)
+        # k=10 to retrieve more context ensuring we catch multi-line attribute definitions
+        docs = vector_store.similarity_search_with_score(query, k=10)
         
-        # 1.35 is a more balanced threshold for text-embedding-3-small
-        relevant_docs = [doc for doc, score in docs if score < 1.35]
+        # Slightly looser threshold to allow for better concept matching
+        # Increased to 1.65 to capture broader queries like "principal name"
+        relevant_docs = [doc for doc, score in docs if score < 1.65]
         context = "\n\n".join([doc.page_content for doc in relevant_docs]) if relevant_docs else ""
 
+        # Social & Fallback Handling
         if not context and len(query) > 3:
-            # Check for social greetings manually to keep it friendly but strict on data
-            greetings = ["hi", "hello", "hey", "vanakam", "namaste"]
+            # Check for social greetings manually to keep it friendly
+            greetings = ["hi", "hello", "hey", "vanakam", "namaste", "good morning", "good evening"]
             if any(g in query.lower() for g in greetings):
-                return {"answer": "Vanakam! 👋 I am your MIET AI Agent. I can assist you with details from our records. How can I help you today?", "version": "9.3-Refined"}
-            return {"answer": "I apologize, but I don't have that specific information in the current college documents. Please visit the college office for the latest details.", "version": "9.3-Refined"}
+                return {"answer": "Vanakam! 👋 I am your MIET AI Agent. I'm here to answer your questions about courses, admissions, fees, and more. How can I assist you today?", "version": "9.5-Smart"}
+            
+            # If completely no context found
+            return {"answer": "I recently checked my records, but I couldn't find information regarding that specific query. You might want to check with the college administration directly, or ask me about general college details like Courses or Admissions!", "version": "9.5-Smart"}
 
         # Generate response using LLM with the retrieved context
         messages = [
@@ -142,11 +159,12 @@ async def chat(request: ChatRequest):
         ]
         
         response = llm.invoke(messages)
-        return {"answer": response.content, "version": "9.3-Refined"}
+        return {"answer": response.content, "version": "9.5-Smart"}
         
     except Exception as e:
         return {"answer": f"Agent error: {str(e)}", "version": "9.2-Agent"}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Enable reload for easier development updates
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
